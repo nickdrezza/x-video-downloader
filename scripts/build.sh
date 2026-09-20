@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="$ROOT_DIR/.build"
-APP_NAME="X Video Downloader"
+APP_NAME="X Downloader"
 APP_DIR="$BUILD_DIR/$APP_NAME.app"
 ICONSET_DIR="$BUILD_DIR/AppIcon.iconset"
 
@@ -20,8 +20,9 @@ done
 
 iconutil -c icns "$ICONSET_DIR" -o "$APP_DIR/Contents/Resources/AppIcon.icns"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
+SWIFT_SOURCES=("$ROOT_DIR"/Sources/XVideoDownloader/*.swift)
 swiftc -O -framework AppKit \
-  "$ROOT_DIR/Sources/XVideoDownloader/main.swift" \
+  "${SWIFT_SOURCES[@]}" \
   -o "$APP_DIR/Contents/MacOS/XVideoDownloader"
 
 xattr -cr "$APP_DIR"
