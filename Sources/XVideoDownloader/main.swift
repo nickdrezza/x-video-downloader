@@ -88,11 +88,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureInputForMode()
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(inputTextView)
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         true
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        window?.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        window?.center()
+        window?.makeKeyAndOrderFront(nil)
+        window?.orderFrontRegardless()
+        NSRunningApplication.current.activate(options: [.activateAllWindows])
+        NSApp.activate(ignoringOtherApps: true)
+        return true
     }
 
     private func buildInterface() {
@@ -104,22 +115,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         window.title = "X Downloader"
         window.isRestorable = false
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.center()
 
         let root = NSStackView()
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 12
-        root.translatesAutoresizingMaskIntoConstraints = false
-        window.contentView = NSView()
-        window.contentView?.addSubview(root)
-
-        NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24),
-            root.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24),
-            root.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24),
-            root.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor, constant: -24)
-        ])
+        let contentView = NSView(frame: NSRect(
+            origin: .zero,
+            size: window.contentRect(forFrameRect: window.frame).size
+        ))
+        window.contentView = contentView
+        contentView.addSubview(root)
+        root.frame = contentView.bounds.insetBy(dx: 24, dy: 24)
+        root.autoresizingMask = [.width, .height]
 
         let title = NSTextField(labelWithString: "X Downloader")
         title.font = .systemFont(ofSize: 21, weight: .semibold)
