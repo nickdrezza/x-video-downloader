@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here.
 
+## 1.2.0 — 2026-09-20
+
+- Renamed the app to X Downloader
+- Add Download + compress and Compress only modes
+- Restore image attachment downloads through `gallery-dl`
+- Add target-size image and video compression through FFmpeg
+- Add file drag-and-drop and multi-file selection
+- Add compact Activity disclosure for detailed logs
+- Keep authenticated browser-cookie support in the app menu
+
+## 1.1.0 — 2026-09-20
+
+- Renamed the app to X Downloader
+- Added authenticated browser-cookie support
+- Accepted Reddit and removed-platform video URLs alongside X/Twitter URLs
+- Continued through mixed batches and skipped posts without downloadable video
+- Kept video downloads and audio merging through `yt-dlp` and FFmpeg
+
 ## 1.0.1 — 2026-09-20
 
 - Replaced the app icon with a compact pixel-art design matching the Open Media Compressor icon family
