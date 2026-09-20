@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="X Video Downloader"
+APP_NAME="X Downloader"
 
 "$ROOT_DIR/scripts/build.sh"
 cd "$ROOT_DIR/.build"

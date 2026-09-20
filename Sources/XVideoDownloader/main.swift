@@ -1,27 +1,91 @@
 import AppKit
 import Foundation
 
+private enum OperationMode: String {
+    case downloadAndCompress = "download"
+    case compressOnly = "compress"
+}
+
+private struct BrowserCookieOption {
+    let title: String
+    let identifier: String
+}
+
+private struct WorkCancelled: Error {}
+
+private final class MediaDropTextView: NSTextView {
+    var onFileURLsDropped: (([URL]) -> Void)?
+    var onReadOnlyClick: (() -> Void)?
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        fileURLs(from: sender.draggingPasteboard).isEmpty ? [] : .copy
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = fileURLs(from: sender.draggingPasteboard)
+        guard !urls.isEmpty else { return false }
+        onFileURLsDropped?(urls)
+        return true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if !isEditable, let onReadOnlyClick {
+            onReadOnlyClick()
+            return
+        }
+        super.mouseDown(with: event)
+    }
+
+    private func fileURLs(from pasteboard: NSPasteboard) -> [URL] {
+        let objects = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) ?? []
+        return objects.compactMap { object in
+            guard let url = object as? NSURL else { return nil }
+            return url.isFileURL ? url as URL : nil
+        }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let browserOptions = [
+        BrowserCookieOption(title: "Safari", identifier: "safari"),
+        BrowserCookieOption(title: "Chrome", identifier: "chrome"),
+        BrowserCookieOption(title: "Firefox", identifier: "firefox"),
+        BrowserCookieOption(title: "Edge", identifier: "edge"),
+        BrowserCookieOption(title: "Brave", identifier: "brave"),
+        BrowserCookieOption(title: "Chromium", identifier: "chromium"),
+        BrowserCookieOption(title: "Opera", identifier: "opera"),
+        BrowserCookieOption(title: "Vivaldi", identifier: "vivaldi")
+    ]
+
     private var window: NSWindow!
-    private let inputTextView = NSTextView()
-    private let pasteButton = NSButton(title: "Paste", target: nil, action: nil)
+    private let modePopup = NSPopUpButton()
+    private let inputTextView = MediaDropTextView()
     private let folderLabel = NSTextField(labelWithString: "No folder selected")
     private let chooseFolderButton = NSButton(title: "Choose Folder…", target: nil, action: nil)
-    private let downloadButton = NSButton(title: "Download Videos", target: nil, action: nil)
+    private let maxSizeField = NSTextField()
+    private let unitPopup = NSPopUpButton()
+    private let actionButton = NSButton(title: "Download", target: nil, action: nil)
     private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
-    private let progressIndicator = NSProgressIndicator()
-    private let statusLabel = NSTextField(labelWithString: "Paste one or more X/Twitter post URLs to begin.")
-    private let logTextView = NSTextView()
+    private let activityButton = NSButton(title: "Activity", target: nil, action: nil)
+    private let activityScroll = NSScrollView()
+    private let activityTextView = NSTextView()
+    private let subtitleLabel = NSTextField(wrappingLabelWithString: "Paste X image/video links to download.")
 
     private var selectedFolder: URL?
+    private var selectedFiles: [URL] = []
+    private var operationMode: OperationMode = .downloadAndCompress
+    private var activityExpanded = false
+    private var workRunning = false
+    private var cancelRequested = false
+    private let processLock = NSLock()
     private var activeProcess: Process?
-    private var outputPipe: Pipe?
-    private var pendingOutput = Data()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenus()
         buildInterface()
         restoreFolder()
+        restoreCookieBrowser()
+        configureInputForMode()
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(inputTextView)
         NSApp.activate(ignoringOtherApps: true)
@@ -33,20 +97,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildInterface() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 470),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
-        window.title = "X Video Downloader"
+        window.title = "X Downloader"
         window.isRestorable = false
         window.center()
-        window.backgroundColor = .windowBackgroundColor
 
         let root = NSStackView()
         root.orientation = .vertical
         root.alignment = .leading
-        root.spacing = 10
+        root.spacing = 12
         root.translatesAutoresizingMaskIntoConstraints = false
         window.contentView = NSView()
         window.contentView?.addSubview(root)
@@ -54,113 +117,129 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 24),
             root.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -24),
-            root.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 22),
-            root.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor, constant: -20)
+            root.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 24),
+            root.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor, constant: -24)
         ])
 
-        let title = NSTextField(labelWithString: "Download videos from X")
+        let title = NSTextField(labelWithString: "X Downloader")
         title.font = .systemFont(ofSize: 21, weight: .semibold)
         root.addArrangedSubview(title)
 
-        let subtitle = NSTextField(wrappingLabelWithString: "Paste X or Twitter post links. One per line—or mixed into any text.")
-        subtitle.font = .systemFont(ofSize: 12)
-        subtitle.textColor = .secondaryLabelColor
-        root.addArrangedSubview(subtitle)
-        subtitle.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        modePopup.addItem(withTitle: "Download + compress")
+        modePopup.lastItem?.representedObject = OperationMode.downloadAndCompress.rawValue
+        modePopup.addItem(withTitle: "Compress only")
+        modePopup.lastItem?.representedObject = OperationMode.compressOnly.rawValue
+        modePopup.target = self
+        modePopup.action = #selector(modeChanged)
+        modePopup.controlSize = .large
+        root.addArrangedSubview(modePopup)
+        modePopup.widthAnchor.constraint(equalToConstant: 220).isActive = true
 
-        let inputHeader = NSStackView()
-        inputHeader.orientation = .horizontal
-        inputHeader.alignment = .centerY
-        let inputLabel = NSTextField(labelWithString: "Post links")
-        inputLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        inputHeader.addArrangedSubview(inputLabel)
-        let inputSpacer = NSView()
-        inputSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        inputHeader.addArrangedSubview(inputSpacer)
-        pasteButton.bezelStyle = .accessoryBarAction
-        pasteButton.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "Paste")
-        pasteButton.imagePosition = .imageLeading
-        pasteButton.target = self
-        pasteButton.action = #selector(pasteLinks)
-        inputHeader.addArrangedSubview(pasteButton)
-        root.addArrangedSubview(inputHeader)
-        inputHeader.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.textColor = .secondaryLabelColor
+        root.addArrangedSubview(subtitleLabel)
+        subtitleLabel.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
 
         inputTextView.font = .systemFont(ofSize: 13)
         inputTextView.isRichText = false
         inputTextView.isAutomaticLinkDetectionEnabled = true
-        inputTextView.string = ""
+        inputTextView.textContainerInset = NSSize(width: 10, height: 10)
+        inputTextView.onFileURLsDropped = { [weak self] urls in
+            self?.selectFiles(urls)
+        }
+        inputTextView.onReadOnlyClick = { [weak self] in
+            self?.chooseFiles()
+        }
+
         let inputScroll = NSScrollView()
         inputScroll.hasVerticalScroller = true
-        inputScroll.borderType = .lineBorder
+        inputScroll.autohidesScrollers = true
+        inputScroll.borderType = .bezelBorder
+        inputScroll.drawsBackground = true
+        inputScroll.backgroundColor = .textBackgroundColor
         inputScroll.documentView = inputTextView
         inputScroll.translatesAutoresizingMaskIntoConstraints = false
         root.addArrangedSubview(inputScroll)
         inputScroll.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
-        inputScroll.heightAnchor.constraint(equalToConstant: 112).isActive = true
+        inputScroll.heightAnchor.constraint(equalToConstant: 132).isActive = true
 
-        let folderRow = NSStackView()
-        folderRow.orientation = .horizontal
-        folderRow.alignment = .centerY
-        folderRow.spacing = 8
-        let folderIcon = NSImageView(image: NSImage(systemSymbolName: "folder.fill", accessibilityDescription: "Download folder")!)
-        folderIcon.contentTintColor = .secondaryLabelColor
-        folderRow.addArrangedSubview(folderIcon)
-        folderLabel.lineBreakMode = .byTruncatingMiddle
-        folderLabel.textColor = .secondaryLabelColor
-        folderLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let outputRow = NSStackView()
+        outputRow.orientation = .horizontal
+        outputRow.alignment = .centerY
+        outputRow.spacing = 8
         chooseFolderButton.target = self
         chooseFolderButton.action = #selector(chooseFolder)
         chooseFolderButton.bezelStyle = .rounded
-        folderRow.addArrangedSubview(folderLabel)
-        folderRow.addArrangedSubview(chooseFolderButton)
-        root.addArrangedSubview(folderRow)
-        folderRow.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        outputRow.addArrangedSubview(chooseFolderButton)
+        folderLabel.textColor = .secondaryLabelColor
+        folderLabel.lineBreakMode = .byTruncatingMiddle
+        folderLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        outputRow.addArrangedSubview(folderLabel)
+        let outputSpacer = NSView()
+        outputSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        outputRow.addArrangedSubview(outputSpacer)
+        let maxLabel = NSTextField(labelWithString: "Max size:")
+        maxLabel.textColor = .secondaryLabelColor
+        outputRow.addArrangedSubview(maxLabel)
+        maxSizeField.placeholderString = "No limit"
+        maxSizeField.alignment = .right
+        maxSizeField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        maxSizeField.widthAnchor.constraint(equalToConstant: 76).isActive = true
+        outputRow.addArrangedSubview(maxSizeField)
+        unitPopup.addItem(withTitle: "MB")
+        unitPopup.lastItem?.representedObject = "MB"
+        unitPopup.addItem(withTitle: "KB")
+        unitPopup.lastItem?.representedObject = "KB"
+        unitPopup.selectItem(at: 0)
+        outputRow.addArrangedSubview(unitPopup)
+        root.addArrangedSubview(outputRow)
+        outputRow.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
 
         let actionRow = NSStackView()
         actionRow.orientation = .horizontal
         actionRow.alignment = .centerY
-        actionRow.spacing = 10
-        downloadButton.bezelStyle = .rounded
-        downloadButton.controlSize = .large
-        downloadButton.image = NSImage(systemSymbolName: "arrow.down.circle.fill", accessibilityDescription: "Download")
-        downloadButton.imagePosition = .imageLeading
-        downloadButton.keyEquivalent = "\r"
-        downloadButton.target = self
-        downloadButton.action = #selector(startDownload)
+        actionRow.spacing = 8
+        actionButton.target = self
+        actionButton.action = #selector(startOperation)
+        actionButton.bezelStyle = .rounded
+        actionButton.controlSize = .large
+        actionButton.keyEquivalent = "\r"
+        actionRow.addArrangedSubview(actionButton)
         cancelButton.target = self
-        cancelButton.action = #selector(cancelDownload)
-        cancelButton.isEnabled = false
+        cancelButton.action = #selector(cancelOperation)
         cancelButton.bezelStyle = .rounded
-        progressIndicator.style = .spinning
-        progressIndicator.controlSize = .small
-        progressIndicator.isDisplayedWhenStopped = false
-        actionRow.addArrangedSubview(downloadButton)
+        cancelButton.controlSize = .large
+        cancelButton.isEnabled = false
         actionRow.addArrangedSubview(cancelButton)
-        actionRow.addArrangedSubview(progressIndicator)
         root.addArrangedSubview(actionRow)
 
-        statusLabel.textColor = .secondaryLabelColor
-        statusLabel.lineBreakMode = .byTruncatingTail
-        root.addArrangedSubview(statusLabel)
-        statusLabel.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        let activityRow = NSStackView()
+        activityRow.orientation = .horizontal
+        activityRow.alignment = .centerY
+        let activitySpacer = NSView()
+        activitySpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        activityRow.addArrangedSubview(activitySpacer)
+        activityButton.setButtonType(.toggle)
+        activityButton.bezelStyle = .rounded
+        activityButton.target = self
+        activityButton.action = #selector(toggleActivity)
+        activityRow.addArrangedSubview(activityButton)
+        root.addArrangedSubview(activityRow)
+        activityRow.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
 
-        let logLabel = NSTextField(labelWithString: "Activity")
-        logLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        root.addArrangedSubview(logLabel)
-
-        logTextView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        logTextView.isEditable = false
-        logTextView.isRichText = false
-        logTextView.backgroundColor = NSColor.textBackgroundColor
-        let logScroll = NSScrollView()
-        logScroll.hasVerticalScroller = true
-        logScroll.borderType = .lineBorder
-        logScroll.documentView = logTextView
-        logScroll.translatesAutoresizingMaskIntoConstraints = false
-        root.addArrangedSubview(logScroll)
-        logScroll.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
-        logScroll.heightAnchor.constraint(equalToConstant: 105).isActive = true
+        activityTextView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        activityTextView.isEditable = false
+        activityTextView.isRichText = false
+        activityTextView.textContainerInset = NSSize(width: 8, height: 8)
+        activityScroll.hasVerticalScroller = true
+        activityScroll.autohidesScrollers = true
+        activityScroll.borderType = .bezelBorder
+        activityScroll.documentView = activityTextView
+        activityScroll.translatesAutoresizingMaskIntoConstraints = false
+        activityScroll.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
+        activityScroll.heightAnchor.constraint(equalToConstant: 122).isActive = true
+        activityScroll.isHidden = true
+        root.addArrangedSubview(activityScroll)
     }
 
     private func buildMenus() {
@@ -169,9 +248,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appItem = NSMenuItem()
         mainMenu.addItem(appItem)
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "About X Video Downloader", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "About X Downloader", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Quit X Video Downloader", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+
+        let cookiesItem = NSMenuItem(title: "Browser Cookies", action: nil, keyEquivalent: "")
+        let cookiesMenu = NSMenu(title: "Browser Cookies")
+        for option in browserOptions {
+            let item = NSMenuItem(title: option.title, action: #selector(selectCookieBrowser(_:)), keyEquivalent: "")
+            item.representedObject = option.identifier
+            cookiesMenu.addItem(item)
+        }
+        cookiesItem.submenu = cookiesMenu
+        appMenu.addItem(cookiesItem)
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Quit X Downloader", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
 
         let editItem = NSMenuItem()
@@ -185,33 +275,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = editMenu
-
         NSApp.mainMenu = mainMenu
     }
 
-    @objc private func pasteLinks() {
-        window.makeFirstResponder(inputTextView)
-        inputTextView.paste(nil)
+    @objc private func modeChanged() {
+        operationMode = modePopup.selectedItem?.representedObject as? String == OperationMode.compressOnly.rawValue
+            ? .compressOnly
+            : .downloadAndCompress
+        configureInputForMode()
+    }
+
+    private func configureInputForMode() {
+        let isCompressOnly = operationMode == .compressOnly
+        subtitleLabel.stringValue = isCompressOnly
+            ? "Select images/videos to compress."
+            : "Paste X image/video links to download."
+        actionButton.title = isCompressOnly ? "Compress" : "Download"
+        inputTextView.isEditable = !isCompressOnly && !workRunning
+        inputTextView.isSelectable = !isCompressOnly
+        inputTextView.toolTip = isCompressOnly
+            ? "Drop files here or click to select multiple files."
+            : "Paste supported X, Reddit, or RedGifs links here."
+        if isCompressOnly { updateSelectedFileText() }
+    }
+
+    @objc private func selectCookieBrowser(_ sender: NSMenuItem) {
+        guard let identifier = sender.representedObject as? String else { return }
+        UserDefaults.standard.set(identifier, forKey: "cookieBrowser")
+        updateCookieMenuStates()
+        appendActivity("Using \(cookieBrowserDisplayName) browser cookies.\n")
+    }
+
+    private func restoreCookieBrowser() {
+        if UserDefaults.standard.string(forKey: "cookieBrowser") == nil {
+            UserDefaults.standard.set("safari", forKey: "cookieBrowser")
+        }
+        updateCookieMenuStates()
+    }
+
+    private func updateCookieMenuStates() {
+        guard let cookiesMenu = NSApp.mainMenu?.item(at: 0)?.submenu?.item(withTitle: "Browser Cookies")?.submenu else { return }
+        let selected = cookieBrowserIdentifier
+        for item in cookiesMenu.items {
+            item.state = (item.representedObject as? String) == selected ? .on : .off
+        }
+    }
+
+    private var cookieBrowserIdentifier: String {
+        UserDefaults.standard.string(forKey: "cookieBrowser") ?? "safari"
+    }
+
+    private var cookieBrowserDisplayName: String {
+        browserOptions.first(where: { $0.identifier == cookieBrowserIdentifier })?.title ?? "Safari"
     }
 
     @objc private func chooseFolder() {
         let panel = NSOpenPanel()
-        panel.title = "Choose where downloaded videos should be saved"
+        panel.title = "Choose output folder"
         panel.prompt = "Choose Folder"
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        if let selectedFolder {
-            panel.directoryURL = selectedFolder
-        }
+        panel.directoryURL = selectedFolder
 
-        if panel.runModal() == .OK, let folder = panel.url {
-            selectedFolder = folder
-            folderLabel.stringValue = folder.path
-            UserDefaults.standard.set(folder.path, forKey: "downloadFolder")
-            statusLabel.stringValue = "Ready."
-        }
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        selectedFolder = folder
+        folderLabel.stringValue = shortenedPath(folder.path)
+        UserDefaults.standard.set(folder.path, forKey: "downloadFolder")
     }
 
     private func restoreFolder() {
@@ -221,40 +352,234 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var isDirectory: ObjCBool = false
         if FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue {
             selectedFolder = URL(fileURLWithPath: path, isDirectory: true)
-            folderLabel.stringValue = path
-            UserDefaults.standard.set(path, forKey: "downloadFolder")
+            folderLabel.stringValue = shortenedPath(path)
         }
     }
 
-    @objc private func startDownload() {
-        guard activeProcess == nil else { return }
+    private func shortenedPath(_ path: String) -> String {
+        let components = URL(fileURLWithPath: path).pathComponents
+        if components.count <= 2 { return path }
+        return "…/\(components.last ?? path)"
+    }
 
-        let urls = extractPostURLs(from: inputTextView.string)
-        guard !urls.isEmpty else {
-            showAlert(title: "No post links found", message: "Paste at least one x.com or twitter.com URL containing /status/ followed by the post ID.")
-            return
+    private func chooseFiles() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose media files"
+        panel.prompt = "Choose Files"
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        selectFiles(panel.urls)
+    }
+
+    private func selectFiles(_ urls: [URL]) {
+        let files = urls.filter { url in
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && !isDirectory.boolValue
         }
-        guard let folder = selectedFolder else {
-            showAlert(title: "Choose a folder", message: "Select where the downloaded videos should be saved.")
-            return
+        guard !files.isEmpty else { return }
+        var seen = Set(selectedFiles.map { $0.standardizedFileURL.path })
+        for file in files where seen.insert(file.standardizedFileURL.path).inserted {
+            selectedFiles.append(file)
         }
-        guard let ytDlp = findExecutable(named: "yt-dlp") else {
-            showMissingDependencyAlert()
-            return
-        }
-        guard findExecutable(named: "ffmpeg") != nil else {
-            showMissingDependencyAlert()
+        updateSelectedFileText()
+    }
+
+    private func updateSelectedFileText() {
+        inputTextView.string = selectedFiles.map { $0.lastPathComponent }.joined(separator: "\n")
+    }
+
+    @objc private func startOperation() {
+        guard !workRunning else { return }
+        guard let outputFolder = selectedFolder else {
+            showAlert(title: "Choose a folder", message: "Select where the output files should be saved.")
             return
         }
 
-        logTextView.string = ""
-        appendLog("Found \(urls.count) unique post link\(urls.count == 1 ? "" : "s").\n")
-        appendLog("Saving to: \(folder.path)\n\n")
+        let targetBytes: Int64?
+        do {
+            targetBytes = try parseTargetBytes()
+        } catch {
+            showAlert(title: "Invalid max size", message: error.localizedDescription)
+            return
+        }
 
+        let urls: [String]
+        let files: [URL]
+        if operationMode == .downloadAndCompress {
+            urls = extractSupportedURLs(from: inputTextView.string)
+            files = []
+            guard !urls.isEmpty else {
+                showAlert(title: "No supported links found", message: "Paste X, Reddit, or RedGifs links containing media.")
+                return
+            }
+        } else {
+            urls = []
+            files = selectedFiles
+            guard !files.isEmpty else {
+                showAlert(title: "Choose media files", message: "Drop files into the box or click it to select one or more files.")
+                return
+            }
+        }
+
+        guard let ffmpeg = findExecutable(named: "ffmpeg"), let ffprobe = findExecutable(named: "ffprobe") else {
+            showMissingDependencyAlert(missing: "ffmpeg and ffprobe")
+            return
+        }
+        if operationMode == .downloadAndCompress {
+            guard findExecutable(named: "yt-dlp") != nil, findExecutable(named: "gallery-dl") != nil else {
+                showMissingDependencyAlert(missing: "yt-dlp and gallery-dl")
+                return
+            }
+        }
+
+        activityTextView.string = ""
+        activityExpanded = false
+        activityButton.state = .off
+        activityScroll.isHidden = true
+        processLock.lock()
+        cancelRequested = false
+        processLock.unlock()
+        workRunning = true
+        setControlsRunning(true)
+        appendActivity("Mode: \(operationMode == .downloadAndCompress ? "Download + compress" : "Compress only")\n")
+        appendActivity("Output: \(outputFolder.path)\n")
+        appendActivity("Max size: \(targetBytes.map(formatTarget) ?? "no limit")\n\n")
+
+        let browser = cookieBrowserIdentifier
+        let mode = operationMode
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            do {
+                try self.performOperation(
+                    mode: mode,
+                    urls: urls,
+                    files: files,
+                    outputFolder: outputFolder,
+                    targetBytes: targetBytes,
+                    cookieBrowser: browser,
+                    ffmpeg: ffmpeg,
+                    ffprobe: ffprobe
+                )
+                self.finishOperation(message: "Finished successfully.")
+            } catch is WorkCancelled {
+                self.finishOperation(message: "Cancelled. Completed files remain in the selected folder.")
+            } catch {
+                self.finishOperation(message: error.localizedDescription, failed: true)
+            }
+        }
+    }
+
+    @objc private func cancelOperation() {
+        guard workRunning else { return }
+        processLock.lock()
+        cancelRequested = true
+        let process = activeProcess
+        processLock.unlock()
+        process?.terminate()
+        appendActivity("\nCancelling…\n")
+        cancelButton.isEnabled = false
+    }
+
+    private func performOperation(
+        mode: OperationMode,
+        urls: [String],
+        files: [URL],
+        outputFolder: URL,
+        targetBytes: Int64?,
+        cookieBrowser: String,
+        ffmpeg: String,
+        ffprobe: String
+    ) throws {
+        let engine = MediaCompressionEngine(ffmpegPath: ffmpeg, ffprobePath: ffprobe)
+        var sourceFiles = files
+        var temporaryDirectory: URL?
+        defer {
+            if let temporaryDirectory { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        }
+
+        if mode == .downloadAndCompress {
+            let temp = FileManager.default.temporaryDirectory.appendingPathComponent("XDownloader-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+            temporaryDirectory = temp
+            sourceFiles = try downloadMedia(urls: urls, into: temp, cookieBrowser: cookieBrowser)
+        }
+
+        guard !sourceFiles.isEmpty else {
+            throw NSError(domain: "XDownloader", code: 1, userInfo: [NSLocalizedDescriptionKey: "No supported media files were found."])
+        }
+
+        appendActivity("Found \(sourceFiles.count) media file\(sourceFiles.count == 1 ? "" : "s").\n")
+        for (index, source) in sourceFiles.enumerated() {
+            try checkCancellation()
+            let kind = engine.kind(for: source)
+            guard kind != .unsupported else {
+                appendActivity("Skipped unsupported file: \(source.lastPathComponent)\n")
+                continue
+            }
+
+            appendActivity("[\(index + 1)/\(sourceFiles.count)] \(targetBytes == nil ? "Copying" : "Compressing") \(source.lastPathComponent)…\n")
+            let destination: URL
+            let outputBytes: Int64
+            if let targetBytes {
+                let effectiveTarget = min(targetBytes, try fileSize(source))
+                let extensionName = kind == .image ? "jpg" : "mp4"
+                destination = uniqueOutputURL(folder: outputFolder, source: source, suffix: "_c", extensionName: extensionName)
+                outputBytes = try engine.compress(inputURL: source, outputURL: destination, targetBytes: effectiveTarget, run: runCommand)
+            } else {
+                destination = uniqueOutputURL(folder: outputFolder, source: source, suffix: "", extensionName: source.pathExtension)
+                try FileManager.default.copyItem(at: source, to: destination)
+                outputBytes = try fileSize(destination)
+            }
+            appendActivity("Saved \(destination.lastPathComponent) (\(formatSize(outputBytes))).\n")
+        }
+    }
+
+    private func downloadMedia(urls: [String], into directory: URL, cookieBrowser: String) throws -> [URL] {
+        guard let galleryDL = findExecutable(named: "gallery-dl"), let ytDlp = findExecutable(named: "yt-dlp") else {
+            throw NSError(domain: "XDownloader", code: 2, userInfo: [NSLocalizedDescriptionKey: "yt-dlp and gallery-dl are required for downloads."])
+        }
+
+        appendActivity("Using \(cookieBrowserDisplayName(for: cookieBrowser)) browser cookies.\n")
+        appendActivity("Downloading images…\n")
+        let imageFilter = "extension in ('jpg', 'jpeg', 'jfif', 'png', 'apng', 'webp', 'gif', 'bmp', 'tif', 'tiff', 'avif', 'heic', 'heif')"
+        let galleryArguments = [
+            "--config-ignore", "--no-colors", "--no-mtime", "--no-part",
+            "--restrict-filenames", "ascii+", "--directory", directory.path,
+            "--cookies-from-browser", cookieBrowser,
+            "--filter", imageFilter
+        ] + urls
+        do {
+            let result = try runCommand(galleryDL, galleryArguments)
+            if result.status != 0 { appendActivity("gallery-dl completed with errors; continuing.\n") }
+        } catch is WorkCancelled {
+            throw WorkCancelled()
+        } catch {
+            appendActivity("gallery-dl could not resolve some links; continuing with video download.\n")
+        }
+
+        try checkCancellation()
+        appendActivity("Downloading videos…\n")
+        let outputTemplate = directory.appendingPathComponent("media_%(extractor)s_%(id)s_%(autonumber)s.%(ext)s").path
+        let ytArguments = [
+            "--newline", "--ignore-config", "--no-progress", "--ignore-errors", "--no-abort-on-error",
+            "--cookies-from-browser", cookieBrowser,
+            "--format", "bv*+ba/b", "--merge-output-format", "mp4", "--no-overwrites", "--restrict-filenames",
+            "--output", outputTemplate, "--"
+        ] + urls
+        let ytResult = try runCommand(ytDlp, ytArguments)
+        if ytResult.status != 0 { appendActivity("yt-dlp completed with skipped links or errors.\n") }
+
+        return mediaFiles(in: directory)
+    }
+
+    private func runCommand(_ executable: String, _ arguments: [String]) throws -> MediaCommandResult {
+        try checkCancellation()
         let process = Process()
         let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: ytDlp)
-        process.currentDirectoryURL = folder
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
         process.standardOutput = pipe
         process.standardError = pipe
 
@@ -265,128 +590,233 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         environment["PYTHONUNBUFFERED"] = "1"
         process.environment = environment
 
-        let outputTemplate = folder.appendingPathComponent("%(uploader_id|unknown)s_%(id)s_%(playlist_index|single)s.%(ext)s").path
-        process.arguments = [
-            "--newline",
-            "--ignore-config",
-            "--no-progress",
-            "--format", "bv*+ba/b",
-            "--merge-output-format", "mp4",
-            "--no-overwrites",
-            "--restrict-filenames",
-            "--output", outputTemplate,
-            "--"
-        ] + urls
-
-        pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        let outputLock = NSLock()
+        var output = Data()
+        pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty else { return }
-            DispatchQueue.main.async {
-                self?.consumeOutput(data)
-            }
+            outputLock.lock()
+            output.append(data)
+            outputLock.unlock()
         }
 
-        process.terminationHandler = { [weak self] completed in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                pipe.fileHandleForReading.readabilityHandler = nil
-                if !self.pendingOutput.isEmpty {
-                    self.flushPendingOutput()
-                }
-                let wasCancelled = completed.terminationReason == .uncaughtSignal
-                self.finishDownload(exitCode: completed.terminationStatus, wasCancelled: wasCancelled)
-            }
+        processLock.lock()
+        activeProcess = process
+        let shouldCancel = cancelRequested
+        processLock.unlock()
+        if shouldCancel {
+            pipe.fileHandleForReading.readabilityHandler = nil
+            throw WorkCancelled()
         }
 
         do {
-            activeProcess = process
-            outputPipe = pipe
-            setRunning(true)
-            statusLabel.stringValue = "Downloading \(urls.count) post\(urls.count == 1 ? "" : "s")…"
             try process.run()
         } catch {
-            activeProcess = nil
-            outputPipe = nil
-            setRunning(false)
-            showAlert(title: "Could not start the downloader", message: error.localizedDescription)
+            pipe.fileHandleForReading.readabilityHandler = nil
+            clearActiveProcess(process)
+            throw error
+        }
+        process.waitUntilExit()
+        pipe.fileHandleForReading.readabilityHandler = nil
+        let remainder = pipe.fileHandleForReading.readDataToEndOfFile()
+        outputLock.lock()
+        output.append(remainder)
+        let outputText = String(data: output, encoding: .utf8) ?? String(decoding: output, as: UTF8.self)
+        outputLock.unlock()
+        clearActiveProcess(process)
+
+        if !outputText.isEmpty {
+            appendActivity(outputText.hasSuffix("\n") ? outputText : outputText + "\n")
+        }
+        try checkCancellation()
+        return MediaCommandResult(status: process.terminationStatus, output: outputText)
+    }
+
+    private func clearActiveProcess(_ process: Process) {
+        processLock.lock()
+        if activeProcess === process { activeProcess = nil }
+        processLock.unlock()
+    }
+
+    private func checkCancellation() throws {
+        processLock.lock()
+        let cancelled = cancelRequested
+        processLock.unlock()
+        if cancelled { throw WorkCancelled() }
+    }
+
+    private func mediaFiles(in directory: URL) -> [URL] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        let engine = MediaCompressionEngine(ffmpegPath: "", ffprobePath: "")
+        return enumerator.compactMap { item in
+            guard let url = item as? URL,
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true,
+                  !url.pathExtension.lowercased().hasSuffix("part"),
+                  engine.kind(for: url) != .unsupported else { return nil }
+            return url
+        }.sorted { $0.path < $1.path }
+    }
+
+    private func uniqueOutputURL(folder: URL, source: URL, suffix: String, extensionName: String) -> URL {
+        let rawBase = source.deletingPathExtension().lastPathComponent
+        let base = rawBase.isEmpty ? "media" : rawBase
+        let cleanedBase = base.replacingOccurrences(of: "/", with: "_")
+        let normalizedExtension = extensionName.isEmpty ? "" : ".\(extensionName.lowercased())"
+        var candidate = folder.appendingPathComponent("\(cleanedBase)\(suffix)\(normalizedExtension)")
+        var counter = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = folder.appendingPathComponent("\(cleanedBase)\(suffix)_\(counter)\(normalizedExtension)")
+            counter += 1
+        }
+        return candidate
+    }
+
+    private func fileSize(_ url: URL) throws -> Int64 {
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        guard let number = attributes[.size] as? NSNumber else {
+            throw NSError(domain: "XDownloader", code: 3, userInfo: [NSLocalizedDescriptionKey: "Could not read the file size for \(url.lastPathComponent)."])
+        }
+        return number.int64Value
+    }
+
+    private func parseTargetBytes() throws -> Int64? {
+        let text = maxSizeField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return nil }
+        guard let value = Double(text), value.isFinite, value > 0 else { throw MediaCompressionError.invalidTarget }
+        let multiplier: Double = unitPopup.selectedItem?.representedObject as? String == "KB" ? 1024 : 1024 * 1024
+        let bytes = value * multiplier
+        guard bytes.isFinite, bytes >= 1, bytes <= Double(Int64.max) else { throw MediaCompressionError.invalidTarget }
+        return Int64(bytes.rounded())
+    }
+
+    private func formatTarget(_ bytes: Int64) -> String {
+        let unit = unitPopup.selectedItem?.representedObject as? String ?? "MB"
+        let divisor: Double = unit == "KB" ? 1024 : 1024 * 1024
+        return String(format: "%.2f %@", Double(bytes) / divisor, unit)
+    }
+
+    private func formatSize(_ bytes: Int64) -> String {
+        if bytes < 1024 * 1024 { return String(format: "%.2f KB", Double(bytes) / 1024) }
+        return String(format: "%.2f MB", Double(bytes) / (1024 * 1024))
+    }
+
+    private func finishOperation(message: String, failed: Bool = false) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.appendActivity("\n\(message)\n")
+            self.workRunning = false
+            self.setControlsRunning(false)
+            if failed { NSSound.beep() }
         }
     }
 
-    @objc private func cancelDownload() {
-        guard let process = activeProcess, process.isRunning else { return }
-        appendLog("\nCancelling…\n")
-        process.terminate()
-        cancelButton.isEnabled = false
-    }
-
-    private func finishDownload(exitCode: Int32, wasCancelled: Bool) {
-        activeProcess = nil
-        outputPipe = nil
-        setRunning(false)
-
-        if wasCancelled {
-            statusLabel.stringValue = "Cancelled. Any completed files remain in the selected folder."
-            appendLog("\nCancelled.\n")
-        } else if exitCode == 0 {
-            statusLabel.stringValue = "Finished successfully."
-            appendLog("\nFinished successfully.\n")
-            NSSound.beep()
-        } else {
-            statusLabel.stringValue = "Finished with one or more errors. See Activity for details."
-            appendLog("\nDownloader exited with code \(exitCode).\n")
-        }
-    }
-
-    private func setRunning(_ running: Bool) {
-        inputTextView.isEditable = !running
-        pasteButton.isEnabled = !running
+    private func setControlsRunning(_ running: Bool) {
+        modePopup.isEnabled = !running
         chooseFolderButton.isEnabled = !running
-        downloadButton.isEnabled = !running
+        maxSizeField.isEnabled = !running
+        unitPopup.isEnabled = !running
+        actionButton.isEnabled = !running
         cancelButton.isEnabled = running
-        if running {
-            progressIndicator.startAnimation(nil)
+        inputTextView.isEditable = !running && operationMode == .downloadAndCompress
+    }
+
+    @objc private func toggleActivity() {
+        activityExpanded.toggle()
+        activityScroll.isHidden = !activityExpanded
+        activityButton.state = activityExpanded ? .on : .off
+        if activityExpanded { activityTextView.scrollToEndOfDocument(nil) }
+    }
+
+    private func appendActivity(_ text: String) {
+        let append = { [weak self] in
+            guard let self else { return }
+            self.activityTextView.textStorage?.append(NSAttributedString(string: text, attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+                .foregroundColor: NSColor.labelColor
+            ]))
+            self.activityTextView.scrollToEndOfDocument(nil)
+        }
+        if Thread.isMainThread {
+            append()
         } else {
-            progressIndicator.stopAnimation(nil)
+            DispatchQueue.main.async(execute: append)
         }
     }
 
-    private func consumeOutput(_ data: Data) {
-        pendingOutput.append(data)
-        flushPendingOutput()
+    private func showMissingDependencyAlert(missing: String) {
+        showAlert(title: "Missing dependency", message: "Install \(missing) with Homebrew, then try again.")
     }
 
-    private func flushPendingOutput() {
-        guard let text = String(data: pendingOutput, encoding: .utf8) else { return }
-        pendingOutput.removeAll(keepingCapacity: true)
-        appendLog(text)
+    private func showAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window)
     }
 
-    private func appendLog(_ text: String) {
-        logTextView.textStorage?.append(NSAttributedString(string: text, attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-            .foregroundColor: NSColor.labelColor
-        ]))
-        logTextView.scrollToEndOfDocument(nil)
+    private func cookieBrowserDisplayName(for identifier: String) -> String {
+        browserOptions.first(where: { $0.identifier == identifier })?.title ?? identifier
     }
 
-    private func extractPostURLs(from text: String) -> [String] {
-        let pattern = #"(?:https?://)?(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/[A-Za-z0-9_]+/status/([0-9]+)(?:[^\s<>“”]*)?"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-            return []
-        }
+    private func extractSupportedURLs(from text: String) -> [String] {
+        let pattern = #"(?i)(?:https?://)?(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/[^\s<>“”]+|(?:https?://)?(?:(?:www|old|new|m)\.)?reddit\.com/[^\s<>“”]+|(?:https?://)?(?:www\.|v3\.)?redgifs\.com/(?:watch|ifr)/[^\s<>“”]+|https?://[^\s<>“”]+\.(?:jpg|jpeg|png|gif|webp|avif)(?:\?[^\s<>“”]*)?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
 
         let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
-        var seenIDs = Set<String>()
+        var seen = Set<String>()
         var results: [String] = []
-
         for match in regex.matches(in: text, range: fullRange) {
-            guard match.numberOfRanges > 1,
-                  let idRange = Range(match.range(at: 1), in: text) else { continue }
-            let postID = String(text[idRange])
-            guard seenIDs.insert(postID).inserted else { continue }
-            results.append("https://x.com/i/status/\(postID)")
+            guard let range = Range(match.range, in: text) else { continue }
+            let candidate = String(text[range]).trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?)]}>\"'"))
+            guard let normalized = normalizeSupportedURL(candidate), seen.insert(normalized).inserted else { continue }
+            results.append(normalized)
         }
         return results
+    }
+
+    private func normalizeSupportedURL(_ candidate: String) -> String? {
+        let urlString = candidate.lowercased().hasPrefix("http") ? candidate : "https://\(candidate)"
+        guard let components = URLComponents(string: urlString), let host = components.host?.lowercased(), !components.path.isEmpty else { return nil }
+
+        if ["x.com", "www.x.com", "mobile.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"].contains(host) {
+            let pattern = #"^/(?:[^/]+|i)/status/([0-9]+)"#
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: components.path, range: NSRange(components.path.startIndex..<components.path.endIndex, in: components.path)),
+                  let idRange = Range(match.range(at: 1), in: components.path) else { return nil }
+            return "https://x.com/i/status/\(components.path[idRange])"
+        }
+
+        if ["reddit.com", "www.reddit.com", "old.reddit.com", "new.reddit.com", "m.reddit.com"].contains(host) {
+            let pattern = #"^/(?:r/[^/]+/comments/[A-Za-z0-9]+(?:/[^/?#]*)?|comments/[A-Za-z0-9]+|(?:u|user)/[^/]+/s/[A-Za-z0-9]+|s/[A-Za-z0-9]+)(?:/)?$"#
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  regex.firstMatch(in: components.path, range: NSRange(components.path.startIndex..<components.path.endIndex, in: components.path)) != nil else { return nil }
+            return "https://www.reddit.com\(components.path)"
+        }
+
+        if host == "redd.it" || host == "www.redd.it" {
+            let pattern = #"^/[A-Za-z0-9]+/?$"#
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  regex.firstMatch(in: components.path, range: NSRange(components.path.startIndex..<components.path.endIndex, in: components.path)) != nil else { return nil }
+            return "https://redd.it\(components.path)"
+        }
+
+        if ["redgifs.com", "www.redgifs.com", "v3.redgifs.com"].contains(host) {
+            let pattern = #"^/(?:watch|ifr)/[^/?#]+/?$"#
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  regex.firstMatch(in: components.path, range: NSRange(components.path.startIndex..<components.path.endIndex, in: components.path)) != nil else { return nil }
+            return "https://\(host)\(components.path)"
+        }
+
+        let imageExtensions = Set(["jpg", "jpeg", "png", "gif", "webp", "avif"])
+        let pathExtension = URL(fileURLWithPath: components.path).pathExtension.lowercased()
+        if imageExtensions.contains(pathExtension) { return candidate }
+        return nil
     }
 
     private func findExecutable(named name: String) -> String? {
@@ -397,32 +827,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
-
-    private func showMissingDependencyAlert() {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = "Downloader components are missing"
-        alert.informativeText = "Install yt-dlp and ffmpeg once with Homebrew, then reopen this app:\n\nbrew install yt-dlp ffmpeg"
-        alert.addButton(withTitle: "Copy Install Command")
-        alert.addButton(withTitle: "OK")
-        if alert.runModal() == .alertFirstButtonReturn {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString("brew install yt-dlp ffmpeg", forType: .string)
-        }
-    }
-
-    private func showAlert(title: String, message: String) {
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        alert.messageText = title
-        alert.informativeText = message
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
 }
 
 let application = NSApplication.shared
-let applicationDelegate = AppDelegate()
-application.delegate = applicationDelegate
-application.setActivationPolicy(.regular)
+let delegate = AppDelegate()
+application.delegate = delegate
 application.run()
