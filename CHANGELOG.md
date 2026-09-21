@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## 1.3.0 — 2026-09-20
+
+- Compact the default window and resize it when Logs are opened
+- Replace mode and size popups with selectable segmented controls
+- Default the size limit to 20 MB
+- Move Logs beside the primary action and remove the Cancel button
+- Keep the selected output folder across launches
+- Add first-launch and menu-accessible Full Disk Access setup
+- Package a drag-to-Applications DMG alongside the ZIP
+
 ## 1.2.0 — 2026-09-20
 
 - Renamed the app to X Downloader
