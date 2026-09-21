@@ -18,6 +18,7 @@ A tiny native macOS app for downloading and compressing media from X/Twitter, Re
 - Drag-and-drop or multi-file selection for local compression
 - Extracts supported URLs mixed into other text and removes duplicates
 - Uses cookies from the selected browser instead of anonymous requests
+- Opens a one-time permissions setup screen for browser-cookie access, with the same setup available from the app menu
 - Never overwrites an existing file
 - Runs locally with no API key and no paid service
 
@@ -30,7 +31,9 @@ A tiny native macOS app for downloading and compressing media from X/Twitter, Re
    ```
 
 2. Log into the supported site in Safari, Chrome, Firefox, Edge, Brave, Chromium, Opera, or Vivaldi. The browser-cookie choice is in the **X Downloader → Browser Cookies** menu.
-3. Download the latest ZIP from [Releases](../../releases/latest), unzip it, and open **X Downloader.app**.
+3. Download the latest DMG from [Releases](../../releases/latest), open it, and drag **X Downloader.app** into **Applications**. The ZIP is also available if you prefer to extract the app manually.
+
+On first launch, choose **Open Full Disk Access** when prompted, add **X Downloader** to macOS **System Settings → Privacy & Security → Full Disk Access**, and relaunch the app. This permission is needed when `yt-dlp` or `gallery-dl` reads cookies from a browser profile. The same setup screen is available at **X Downloader → Permissions Setup…**.
 
 The downloadable release is ad-hoc signed rather than notarized. On first launch, macOS may require you to right-click the app and choose **Open**.
 
@@ -45,11 +48,13 @@ cd x-video-downloader
 open ".build/X Downloader.app"
 ```
 
-The build script compiles for the current Mac architecture, generates the `.icns` file, assembles the app bundle, and ad-hoc signs it. To create a distributable ZIP:
+The build script compiles for the current Mac architecture, generates the `.icns` file, assembles the app bundle, and ad-hoc signs it. To create distributable ZIP and DMG installers:
 
 ```bash
 ./scripts/package.sh
 ```
+
+The DMG contains an **Applications** shortcut for the normal drag-to-install workflow.
 
 ## How it works
 

@@ -11,8 +11,6 @@ private struct BrowserCookieOption {
     let identifier: String
 }
 
-private struct WorkCancelled: Error {}
-
 private final class MediaDropTextView: NSTextView {
     var onFileURLsDropped: (([URL]) -> Void)?
     var onReadOnlyClick: (() -> Void)?
@@ -58,28 +56,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ]
 
     private var window: NSWindow!
-    private let modePopup = NSPopUpButton()
+    private let modeControl = NSSegmentedControl(labels: ["Download & Compress", "Compress Only"], trackingMode: .selectOne, target: nil, action: nil)
     private let inputTextView = MediaDropTextView()
     private let folderLabel = NSTextField(labelWithString: "No folder selected")
     private let chooseFolderButton = NSButton(title: "Choose Folder…", target: nil, action: nil)
     private let maxSizeField = NSTextField()
-    private let unitPopup = NSPopUpButton()
+    private let unitControl = NSSegmentedControl(labels: ["KB", "MB"], trackingMode: .selectOne, target: nil, action: nil)
     private let actionButton = NSButton(title: "Download", target: nil, action: nil)
-    private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
-    private let activityButton = NSButton(title: "Activity", target: nil, action: nil)
+    private let logsButton = NSButton(title: "Logs", target: nil, action: nil)
     private let activityScroll = NSScrollView()
     private let activityTextView = NSTextView()
     private let subtitleLabel = NSTextField(wrappingLabelWithString: "Paste X image/video links to download.")
+
+    private let compactContentHeight: CGFloat = 360
+    private let logsContentHeight: CGFloat = 500
 
     private var selectedFolder: URL?
     private var selectedFiles: [URL] = []
     private var operationMode: OperationMode = .downloadAndCompress
     private var activityExpanded = false
     private var workRunning = false
-    private var cancelRequested = false
-    private let processLock = NSLock()
-    private var activeProcess: Process?
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenus()
         buildInterface()
@@ -90,6 +86,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeFirstResponder(inputTextView)
         NSRunningApplication.current.activate(options: [.activateAllWindows])
         NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.async { [weak self] in
+            self?.showPermissionsSetupIfNeeded()
+        }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        guard window != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.showPermissionsSetupIfNeeded()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -108,7 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildInterface() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 470),
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: compactContentHeight),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -135,15 +141,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         title.font = .systemFont(ofSize: 21, weight: .semibold)
         root.addArrangedSubview(title)
 
-        modePopup.addItem(withTitle: "Download + compress")
-        modePopup.lastItem?.representedObject = OperationMode.downloadAndCompress.rawValue
-        modePopup.addItem(withTitle: "Compress only")
-        modePopup.lastItem?.representedObject = OperationMode.compressOnly.rawValue
-        modePopup.target = self
-        modePopup.action = #selector(modeChanged)
-        modePopup.controlSize = .large
-        root.addArrangedSubview(modePopup)
-        modePopup.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        modeControl.target = self
+        modeControl.action = #selector(modeChanged)
+        modeControl.controlSize = .large
+        modeControl.selectedSegment = 0
+        root.addArrangedSubview(modeControl)
+        modeControl.widthAnchor.constraint(equalToConstant: 300).isActive = true
 
         subtitleLabel.font = .systemFont(ofSize: 12)
         subtitleLabel.textColor = .secondaryLabelColor
@@ -191,17 +194,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let maxLabel = NSTextField(labelWithString: "Max size:")
         maxLabel.textColor = .secondaryLabelColor
         outputRow.addArrangedSubview(maxLabel)
+        maxSizeField.stringValue = "20"
         maxSizeField.placeholderString = "No limit"
         maxSizeField.alignment = .right
         maxSizeField.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
         maxSizeField.widthAnchor.constraint(equalToConstant: 76).isActive = true
         outputRow.addArrangedSubview(maxSizeField)
-        unitPopup.addItem(withTitle: "MB")
-        unitPopup.lastItem?.representedObject = "MB"
-        unitPopup.addItem(withTitle: "KB")
-        unitPopup.lastItem?.representedObject = "KB"
-        unitPopup.selectItem(at: 0)
-        outputRow.addArrangedSubview(unitPopup)
+        unitControl.controlSize = .regular
+        unitControl.selectedSegment = 1
+        outputRow.addArrangedSubview(unitControl)
+        unitControl.widthAnchor.constraint(equalToConstant: 112).isActive = true
         root.addArrangedSubview(outputRow)
         outputRow.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
 
@@ -215,27 +217,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actionButton.controlSize = .large
         actionButton.keyEquivalent = "\r"
         actionRow.addArrangedSubview(actionButton)
-        cancelButton.target = self
-        cancelButton.action = #selector(cancelOperation)
-        cancelButton.bezelStyle = .rounded
-        cancelButton.controlSize = .large
-        cancelButton.isEnabled = false
-        actionRow.addArrangedSubview(cancelButton)
+        let actionSpacer = NSView()
+        actionSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        actionRow.addArrangedSubview(actionSpacer)
+        logsButton.setButtonType(.toggle)
+        logsButton.bezelStyle = .rounded
+        logsButton.controlSize = .large
+        logsButton.target = self
+        logsButton.action = #selector(toggleLogs)
+        actionRow.addArrangedSubview(logsButton)
         root.addArrangedSubview(actionRow)
-
-        let activityRow = NSStackView()
-        activityRow.orientation = .horizontal
-        activityRow.alignment = .centerY
-        let activitySpacer = NSView()
-        activitySpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        activityRow.addArrangedSubview(activitySpacer)
-        activityButton.setButtonType(.toggle)
-        activityButton.bezelStyle = .rounded
-        activityButton.target = self
-        activityButton.action = #selector(toggleActivity)
-        activityRow.addArrangedSubview(activityButton)
-        root.addArrangedSubview(activityRow)
-        activityRow.widthAnchor.constraint(equalTo: root.widthAnchor).isActive = true
 
         activityTextView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         activityTextView.isEditable = false
@@ -270,6 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         cookiesItem.submenu = cookiesMenu
         appMenu.addItem(cookiesItem)
+        appMenu.addItem(withTitle: "Permissions Setup…", action: #selector(showPermissionsSetup), keyEquivalent: "")
         appMenu.addItem(.separator())
         appMenu.addItem(withTitle: "Quit X Downloader", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
@@ -289,7 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func modeChanged() {
-        operationMode = modePopup.selectedItem?.representedObject as? String == OperationMode.compressOnly.rawValue
+        operationMode = modeControl.selectedSegment == 1
             ? .compressOnly
             : .downloadAndCompress
         configureInputForMode()
@@ -321,6 +313,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.set("safari", forKey: "cookieBrowser")
         }
         updateCookieMenuStates()
+    }
+
+    private func showPermissionsSetupIfNeeded() {
+        let key = "didShowPermissionsSetup"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        showPermissionsSetup()
+    }
+
+    @objc private func showPermissionsSetup() {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Set up browser-cookie access"
+        alert.informativeText = "X Downloader uses your selected browser's cookies to access media your account is allowed to view. Grant Full Disk Access to X Downloader in macOS Privacy & Security, then relaunch the app."
+        alert.addButton(withTitle: "Open Full Disk Access")
+        alert.addButton(withTitle: "Later")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.openFullDiskAccessSettings()
+        }
+    }
+
+    private func openFullDiskAccessSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private func updateCookieMenuStates() {
@@ -446,11 +463,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         activityTextView.string = ""
         activityExpanded = false
-        activityButton.state = .off
+        logsButton.state = .off
         activityScroll.isHidden = true
-        processLock.lock()
-        cancelRequested = false
-        processLock.unlock()
+        resizeWindow(toContentHeight: compactContentHeight)
         workRunning = true
         setControlsRunning(true)
         appendActivity("Mode: \(operationMode == .downloadAndCompress ? "Download + compress" : "Compress only")\n")
@@ -473,23 +488,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     ffprobe: ffprobe
                 )
                 self.finishOperation(message: "Finished successfully.")
-            } catch is WorkCancelled {
-                self.finishOperation(message: "Cancelled. Completed files remain in the selected folder.")
             } catch {
                 self.finishOperation(message: error.localizedDescription, failed: true)
             }
         }
-    }
-
-    @objc private func cancelOperation() {
-        guard workRunning else { return }
-        processLock.lock()
-        cancelRequested = true
-        let process = activeProcess
-        processLock.unlock()
-        process?.terminate()
-        appendActivity("\nCancelling…\n")
-        cancelButton.isEnabled = false
     }
 
     private func performOperation(
@@ -522,7 +524,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         appendActivity("Found \(sourceFiles.count) media file\(sourceFiles.count == 1 ? "" : "s").\n")
         for (index, source) in sourceFiles.enumerated() {
-            try checkCancellation()
             let kind = engine.kind(for: source)
             guard kind != .unsupported else {
                 appendActivity("Skipped unsupported file: \(source.lastPathComponent)\n")
@@ -560,16 +561,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "--cookies-from-browser", cookieBrowser,
             "--filter", imageFilter
         ] + urls
-        do {
-            let result = try runCommand(galleryDL, galleryArguments)
-            if result.status != 0 { appendActivity("gallery-dl completed with errors; continuing.\n") }
-        } catch is WorkCancelled {
-            throw WorkCancelled()
-        } catch {
-            appendActivity("gallery-dl could not resolve some links; continuing with video download.\n")
-        }
+        let result = try runCommand(galleryDL, galleryArguments)
+        if result.status != 0 { appendActivity("gallery-dl completed with errors; continuing.\n") }
 
-        try checkCancellation()
         appendActivity("Downloading videos…\n")
         let outputTemplate = directory.appendingPathComponent("media_%(extractor)s_%(id)s_%(autonumber)s.%(ext)s").path
         let ytArguments = [
@@ -585,7 +579,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func runCommand(_ executable: String, _ arguments: [String]) throws -> MediaCommandResult {
-        try checkCancellation()
         let process = Process()
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -610,20 +603,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             outputLock.unlock()
         }
 
-        processLock.lock()
-        activeProcess = process
-        let shouldCancel = cancelRequested
-        processLock.unlock()
-        if shouldCancel {
-            pipe.fileHandleForReading.readabilityHandler = nil
-            throw WorkCancelled()
-        }
-
         do {
             try process.run()
         } catch {
             pipe.fileHandleForReading.readabilityHandler = nil
-            clearActiveProcess(process)
             throw error
         }
         process.waitUntilExit()
@@ -633,26 +616,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         output.append(remainder)
         let outputText = String(data: output, encoding: .utf8) ?? String(decoding: output, as: UTF8.self)
         outputLock.unlock()
-        clearActiveProcess(process)
 
         if !outputText.isEmpty {
             appendActivity(outputText.hasSuffix("\n") ? outputText : outputText + "\n")
         }
-        try checkCancellation()
         return MediaCommandResult(status: process.terminationStatus, output: outputText)
-    }
-
-    private func clearActiveProcess(_ process: Process) {
-        processLock.lock()
-        if activeProcess === process { activeProcess = nil }
-        processLock.unlock()
-    }
-
-    private func checkCancellation() throws {
-        processLock.lock()
-        let cancelled = cancelRequested
-        processLock.unlock()
-        if cancelled { throw WorkCancelled() }
     }
 
     private func mediaFiles(in directory: URL) -> [URL] {
@@ -697,14 +665,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let text = maxSizeField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { return nil }
         guard let value = Double(text), value.isFinite, value > 0 else { throw MediaCompressionError.invalidTarget }
-        let multiplier: Double = unitPopup.selectedItem?.representedObject as? String == "KB" ? 1024 : 1024 * 1024
+        let multiplier: Double = unitControl.selectedSegment == 0 ? 1024 : 1024 * 1024
         let bytes = value * multiplier
         guard bytes.isFinite, bytes >= 1, bytes <= Double(Int64.max) else { throw MediaCompressionError.invalidTarget }
         return Int64(bytes.rounded())
     }
 
     private func formatTarget(_ bytes: Int64) -> String {
-        let unit = unitPopup.selectedItem?.representedObject as? String ?? "MB"
+        let unit = unitControl.selectedSegment == 0 ? "KB" : "MB"
         let divisor: Double = unit == "KB" ? 1024 : 1024 * 1024
         return String(format: "%.2f %@", Double(bytes) / divisor, unit)
     }
@@ -725,20 +693,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setControlsRunning(_ running: Bool) {
-        modePopup.isEnabled = !running
+        modeControl.isEnabled = !running
         chooseFolderButton.isEnabled = !running
         maxSizeField.isEnabled = !running
-        unitPopup.isEnabled = !running
+        unitControl.isEnabled = !running
         actionButton.isEnabled = !running
-        cancelButton.isEnabled = running
         inputTextView.isEditable = !running && operationMode == .downloadAndCompress
     }
 
-    @objc private func toggleActivity() {
+    @objc private func toggleLogs() {
         activityExpanded.toggle()
         activityScroll.isHidden = !activityExpanded
-        activityButton.state = activityExpanded ? .on : .off
-        if activityExpanded { activityTextView.scrollToEndOfDocument(nil) }
+        logsButton.state = activityExpanded ? .on : .off
+        resizeWindow(toContentHeight: activityExpanded ? logsContentHeight : compactContentHeight)
+        if activityExpanded {
+            window.layoutIfNeeded()
+            activityTextView.scrollToEndOfDocument(nil)
+        }
+    }
+
+    private func resizeWindow(toContentHeight height: CGFloat) {
+        var frame = window.frame
+        let currentContentHeight = window.contentRect(forFrameRect: frame).height
+        guard abs(currentContentHeight - height) > 0.5 else { return }
+        let contentRect = NSRect(x: 0, y: 0, width: frame.width, height: height)
+        let targetFrame = window.frameRect(forContentRect: contentRect)
+        frame.origin.y += frame.height - targetFrame.height
+        frame.size = targetFrame.size
+        window.setFrame(frame, display: true, animate: true)
     }
 
     private func appendActivity(_ text: String) {
