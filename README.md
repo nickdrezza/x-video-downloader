@@ -1,6 +1,6 @@
 # X Downloader
 
-A tiny native macOS app for downloading and compressing media from X/Twitter, Reddit, and removed-platform. Paste links or choose local files, set an optional target size, and keep the processing local.
+A tiny native macOS app for downloading and compressing media from X/Twitter and Reddit. Paste links or choose local files, set an optional target size, and keep the processing local.
 
 ![macOS](https://img.shields.io/badge/macOS-13%2B-black)
 ![Swift](https://img.shields.io/badge/Swift-6-orange)
@@ -8,7 +8,7 @@ A tiny native macOS app for downloading and compressing media from X/Twitter, Re
 
 ## Features
 
-- Download + compress mode for X/Twitter, Reddit, `redd.it`, and removed-platform links
+- Download + compress mode for X/Twitter, Reddit, and `redd.it` links
 - Image attachments are downloaded with `gallery-dl`; video attachments are downloaded with `yt-dlp`
 - Compress-only mode for multiple local image and video files
 - Optional max-size target in MB or KB; empty means no size limit and preserves the downloaded/input file

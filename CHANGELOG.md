@@ -26,7 +26,7 @@ All notable changes to this project are documented here.
 
 - Renamed the app to X Downloader
 - Added authenticated browser-cookie support
-- Accepted Reddit and removed-platform video URLs alongside X/Twitter URLs
+- Accepted Reddit video URLs alongside X/Twitter URLs
 - Continued through mixed batches and skipped posts without downloadable video
 - Kept video downloads and audio merging through `yt-dlp` and FFmpeg
 

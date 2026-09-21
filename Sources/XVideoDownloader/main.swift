@@ -297,7 +297,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         inputTextView.isSelectable = !isCompressOnly
         inputTextView.toolTip = isCompressOnly
             ? "Drop files here or click to select multiple files."
-            : "Paste supported X, Reddit, or removed-platform links here."
+            : "Paste supported X or Reddit links here."
         if isCompressOnly { updateSelectedFileText() }
     }
 
@@ -438,7 +438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             urls = extractSupportedURLs(from: inputTextView.string)
             files = []
             guard !urls.isEmpty else {
-                showAlert(title: "No supported links found", message: "Paste X, Reddit, or removed-platform links containing media.")
+                showAlert(title: "No supported links found", message: "Paste X or Reddit links containing media.")
                 return
             }
         } else {
@@ -757,7 +757,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func extractSupportedURLs(from text: String) -> [String] {
-        let pattern = #"(?i)(?:https?://)?(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/[^\s<>“”]+|(?:https?://)?(?:(?:www|old|new|m)\.)?reddit\.com/[^\s<>“”]+|(?:https?://)?(?:www\.|v3\.)?removed-platform\.com/(?:watch|ifr)/[^\s<>“”]+|https?://[^\s<>“”]+\.(?:jpg|jpeg|png|gif|webp|avif)(?:\?[^\s<>“”]*)?"#
+        let pattern = #"(?i)(?:https?://)?(?:(?:www|mobile)\.)?(?:x\.com|twitter\.com)/[^\s<>“”]+|(?:https?://)?(?:(?:www|old|new|m)\.)?reddit\.com/[^\s<>“”]+|https?://[^\s<>“”]+\.(?:jpg|jpeg|png|gif|webp|avif)(?:\?[^\s<>“”]*)?"#
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return [] }
 
         let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
@@ -796,13 +796,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let regex = try? NSRegularExpression(pattern: pattern),
                   regex.firstMatch(in: components.path, range: NSRange(components.path.startIndex..<components.path.endIndex, in: components.path)) != nil else { return nil }
             return "https://redd.it\(components.path)"
-        }
-
-        if ["removed-platform.com", "www.removed-platform.com", "v3.removed-platform.com"].contains(host) {
-            let pattern = #"^/(?:watch|ifr)/[^/?#]+/?$"#
-            guard let regex = try? NSRegularExpression(pattern: pattern),
-                  regex.firstMatch(in: components.path, range: NSRange(components.path.startIndex..<components.path.endIndex, in: components.path)) != nil else { return nil }
-            return "https://\(host)\(components.path)"
         }
 
         let imageExtensions = Set(["jpg", "jpeg", "png", "gif", "webp", "avif"])
