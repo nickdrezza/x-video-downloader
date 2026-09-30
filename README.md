@@ -11,7 +11,7 @@ A tiny native macOS app for downloading and compressing media from X/Twitter and
 - Download + compress mode for X/Twitter, Reddit, and `redd.it` links
 - Image attachments are downloaded with `gallery-dl`; video attachments are downloaded with `yt-dlp`
 - Compress-only mode for multiple local image and video files
-- Optional max-size target in MB or KB; empty means no size limit and preserves the downloaded/input file
+- Strict max-size target in decimal MB or KB (20 MB = 20,000,000 bytes); empty means no size limit and preserves the downloaded/input file
 - JPEG image output with quality search, resizing, and white flattening for transparency
 - H.264/AAC MP4 video output with bitrate planning, resizing, frame-rate normalization, and retries
 - Removes media metadata and chapters from compressed video output
