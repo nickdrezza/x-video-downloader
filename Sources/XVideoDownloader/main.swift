@@ -662,24 +662,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func parseTargetBytes() throws -> Int64? {
-        let text = maxSizeField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.isEmpty { return nil }
-        guard let value = Double(text), value.isFinite, value > 0 else { throw MediaCompressionError.invalidTarget }
-        let multiplier: Double = unitControl.selectedSegment == 0 ? 1024 : 1024 * 1024
-        let bytes = value * multiplier
-        guard bytes.isFinite, bytes >= 1, bytes <= Double(Int64.max) else { throw MediaCompressionError.invalidTarget }
-        return Int64(bytes.rounded())
+        try MediaSize.targetBytes(text: maxSizeField.stringValue, unit: unitControl.selectedSegment == 0 ? .kilobytes : .megabytes)
     }
 
     private func formatTarget(_ bytes: Int64) -> String {
-        let unit = unitControl.selectedSegment == 0 ? "KB" : "MB"
-        let divisor: Double = unit == "KB" ? 1024 : 1024 * 1024
-        return String(format: "%.2f %@", Double(bytes) / divisor, unit)
+        MediaSize.format(bytes, unit: unitControl.selectedSegment == 0 ? .kilobytes : .megabytes)
     }
 
     private func formatSize(_ bytes: Int64) -> String {
-        if bytes < 1024 * 1024 { return String(format: "%.2f KB", Double(bytes) / 1024) }
-        return String(format: "%.2f MB", Double(bytes) / (1024 * 1024))
+        MediaSize.format(bytes)
     }
 
     private func finishOperation(message: String, failed: Bool = false) {

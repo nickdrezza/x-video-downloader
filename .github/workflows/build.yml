@@ -15,3 +15,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Build app
         run: ./scripts/build.sh
+      - name: Install test encoder
+        run: brew install ffmpeg
+      - name: Test size limits
+        run: ./scripts/test.sh

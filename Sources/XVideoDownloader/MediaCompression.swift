@@ -59,14 +59,26 @@ struct MediaCompressionEngine {
     ) throws -> Int64 {
         guard targetBytes > 0 else { throw MediaCompressionError.invalidTarget }
 
+        // Publish only a verified output; discard retries and failed encodes.
+        let stagingDirectory = outputURL.deletingLastPathComponent().appendingPathComponent(".XDownloader-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: stagingDirectory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: stagingDirectory) }
+        let stagedOutput = stagingDirectory.appendingPathComponent(outputURL.lastPathComponent)
+
         switch kind(for: inputURL) {
         case .image:
-            return try compressImage(inputURL: inputURL, outputURL: outputURL, targetBytes: targetBytes, run: run)
+            _ = try compressImage(inputURL: inputURL, outputURL: stagedOutput, targetBytes: targetBytes, run: run)
         case .video:
-            return try compressVideo(inputURL: inputURL, outputURL: outputURL, targetBytes: targetBytes, run: run)
+            _ = try compressVideo(inputURL: inputURL, outputURL: stagedOutput, targetBytes: targetBytes, run: run)
         case .unsupported:
             throw MediaCompressionError.unsupportedFile(inputURL.lastPathComponent)
         }
+        let bytes = try fileSize(stagedOutput)
+        guard bytes <= targetBytes else {
+            throw MediaCompressionError.outputTooLarge("Could not compress \(inputURL.lastPathComponent) below the requested size.")
+        }
+        try FileManager.default.moveItem(at: stagedOutput, to: outputURL)
+        return bytes
     }
 
     private func compressImage(
@@ -99,7 +111,7 @@ struct MediaCompressionEngine {
                 run: run
             )
             if minimum <= targetBytes {
-                var best = minimum
+                var bestQuality = 31
                 var low = 3
                 var high = 30
                 for _ in 0..<9 where low <= high {
@@ -113,13 +125,14 @@ struct MediaCompressionEngine {
                         run: run
                     )
                     if candidate <= targetBytes {
-                        best = candidate
+                        bestQuality = quality
                         high = quality - 1
                     } else {
                         low = quality + 1
                     }
                 }
-                return best
+                // The last search candidate may be oversized. Write the best fitting JPEG again.
+                return try encodeImage(inputURL: inputURL, outputURL: outputURL, width: width, height: height, quality: bestQuality, run: run)
             }
 
             let ratio = sqrt(Double(targetBytes) / Double(max(minimum, 1)))
@@ -192,7 +205,7 @@ struct MediaCompressionEngine {
             throw MediaCompressionError.invalidMedia("Could not read the duration of the video.")
         }
 
-        let totalBitrate = Int(Double(targetBytes * 8) * 0.965 / probe.duration)
+        let totalBitrate = Int(Double(targetBytes) * 8 * 0.965 / probe.duration)
         let audioBitrate: Int
         if probe.hasAudio {
             audioBitrate = totalBitrate >= 900_000 ? 128_000 : totalBitrate >= 450_000 ? 96_000 : 64_000

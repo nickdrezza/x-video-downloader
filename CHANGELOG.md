@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## 1.3.1 — 2026-09-30
+
+- Use decimal MB and KB so size limits match macOS and upload limits (20 MB = 20,000,000 bytes)
+- Save the best fitting JPEG after image quality search, instead of the last attempted candidate
+- Verify the final file's actual size before saving it and remove failed compression attempts
+
 ## 1.3.0 — 2026-09-20
 
 - Compact the default window and resize it when Logs are opened
