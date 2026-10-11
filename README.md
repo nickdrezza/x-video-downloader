@@ -4,7 +4,7 @@ A tiny native macOS app for downloading and compressing media from X/Twitter and
 
 ![macOS](https://img.shields.io/badge/macOS-13%2B-black)
 ![Swift](https://img.shields.io/badge/Swift-6-orange)
-![License](https://img.shields.io/badge/license-MIT-blue)
+![License](https://img.shields.io/badge/license-AGPL--3.0--only-blue)
 
 ## Features
 
@@ -68,4 +68,12 @@ Only download videos you have permission to save. You are responsible for comply
 
 ## License
 
-[MIT](LICENSE)
+This project is licensed under [GNU AGPLv3 only](LICENSE) (`AGPL-3.0-only`).
+See [NOTICE](NOTICE) for copyright information.
+
+You can use, change, and sell copies under the license terms.
+If you distribute covered code, provide its source under the same license.
+If you change the project and let users access it over a network,
+offer those users the source of your version.
+
+Earlier releases keep the license terms that applied to them.

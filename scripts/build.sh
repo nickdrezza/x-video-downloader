@@ -20,6 +20,11 @@ done
 
 iconutil -c icns "$ICONSET_DIR" -o "$APP_DIR/Contents/Resources/AppIcon.icns"
 cp "$ROOT_DIR/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
+cp "${ROOT_DIR}/LICENSE" "${ROOT_DIR}/NOTICE" "$APP_DIR/Contents/Resources/"
+SOURCE_REF="$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || echo main)"
+printf 'Source code: https://github.com/nickdrezza/x-video-downloader/archive/%s.tar.gz\nBuild instructions: https://github.com/nickdrezza/x-video-downloader/blob/%s/README.md\n' \
+    "$SOURCE_REF" "$SOURCE_REF" > "$APP_DIR/Contents/Resources/SOURCE.txt"
+
 SWIFT_SOURCES=("$ROOT_DIR"/Sources/XVideoDownloader/*.swift)
 swiftc -O -framework AppKit \
   "${SWIFT_SOURCES[@]}" \
