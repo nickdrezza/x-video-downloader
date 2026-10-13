@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="300" viewBox="0 0 960 300" role="img" aria-labelledby="title desc">
+  <title id="title">X Downloader. Paste a link. Keep the media.</title>
+  <desc id="desc">Downloads and compression on your Mac.</desc>
+  <rect width="960" height="300" rx="24" fill="#f3f1ee"/>
+  <circle cx="932" cy="8" r="170" fill="#da6c38" opacity="0.06"/>
+  <g font-family="system-ui, sans-serif" fill="#252526">
+    <text x="52" y="105" font-size="44" font-weight="700">X Downloader</text>
+    <text x="54" y="156" font-size="23">Paste a link. Keep the media.</text>
+    <text x="54" y="218" font-size="15" fill="#5b5a60">Downloads and compression on your Mac.</text>
+  </g>
+  <rect x="531" y="105" width="145" height="75" rx="15" fill="#fff"/>
+  <g fill="none" stroke="#66615c" stroke-width="4" stroke-linecap="round">
+    <path d="M579 133 L570 142 C558 157 577 170 587 157 L597 145 M600 148 L610 138 C623 123 638 141 627 153 L619 162 M588 150 L609 144"/>
+  </g>
+  <path d="M700 143 H745 M733 133 L745 143 L733 153" fill="none" stroke="#9b928a" stroke-width="3" stroke-linecap="round"/>
+  <rect x="773" y="65" width="125" height="159" rx="18" fill="#da6c38"/>
+  <path d="M817 115 L817 162 L856 138 Z" fill="#fff"/>
+  <text x="835" y="202" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" fill="#fff">saved locally</text>
+</svg>
