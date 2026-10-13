@@ -1,70 +1,93 @@
 # X Downloader
 
-A tiny native macOS app for downloading and compressing media from X/Twitter and Reddit. Paste links or choose local files, set an optional target size, and keep the processing local.
+**Paste a link. Keep the media.**
 
-![macOS](https://img.shields.io/badge/macOS-13%2B-black)
-![Swift](https://img.shields.io/badge/Swift-6-orange)
-![License](https://img.shields.io/badge/license-AGPL--3.0--only-blue)
+![X Downloader takes a media link and saves a local file.](docs/readme-banner.svg)
 
-## Features
+A native macOS app for downloading media from X/Twitter and Reddit.
+You can also compress local images and videos to a target size.
 
-- Download + compress mode for X/Twitter, Reddit, and `redd.it` links
-- Image attachments are downloaded with `gallery-dl`; video attachments are downloaded with `yt-dlp`
-- Compress-only mode for multiple local image and video files
-- Strict max-size target in decimal MB or KB (20 MB = 20,000,000 bytes); empty means no size limit and preserves the downloaded/input file
-- JPEG image output with quality search, resizing, and white flattening for transparency
-- H.264/AAC MP4 video output with bitrate planning, resizing, frame-rate normalization, and retries
-- Removes media metadata and chapters from compressed video output
-- Drag-and-drop or multi-file selection for local compression
-- Extracts supported URLs mixed into other text and removes duplicates
-- Uses cookies from the selected browser instead of anonymous requests
-- Opens a one-time permissions setup screen for browser-cookie access, with the same setup available from the app menu
-- Never overwrites an existing file
-- Runs locally with no API key and no paid service
+[**Download for macOS →**](https://github.com/nickdrezza/x-video-downloader/releases/latest)
+
+## Two jobs. One small app.
+
+| Mode | Use it to |
+| --- | --- |
+| Download + compress | Save media from X/Twitter, Reddit, or `redd.it` links. |
+| Compress only | Select or drop local images and videos. |
+
+Set a maximum size in MB or KB, or leave it empty to keep the input file.
+The app accepts multiple files, finds supported URLs in pasted text, removes duplicate URLs,
+and never overwrites an existing file.
 
 ## Install
 
-1. Install the two runtime dependencies:
+Requires macOS 13 or later. Install these three tools first:
 
-   ```bash
-   brew install yt-dlp gallery-dl ffmpeg
-   ```
+```sh
+brew install yt-dlp gallery-dl ffmpeg
+```
 
-2. Log into the supported site in Safari, Chrome, Firefox, Edge, Brave, Chromium, Opera, or Vivaldi. The browser-cookie choice is in the **X Downloader → Browser Cookies** menu.
-3. Download the latest DMG from [Releases](../../releases/latest), open it, and drag **X Downloader.app** into **Applications**. The ZIP is also available if you prefer to extract the app manually.
+1. Log into the source site in a supported browser.
+2. Download the DMG from [Releases](https://github.com/nickdrezza/x-video-downloader/releases/latest).
+3. Open it and drag **X Downloader.app** into Applications. A ZIP is also available.
+4. Open the app and choose the browser in **X Downloader → Browser Cookies**.
+5. Follow **Permissions Setup** if the download tools need access to that browser's cookie store.
 
-On first launch, choose **Open Full Disk Access** when prompted, add **X Downloader** to macOS **System Settings → Privacy & Security → Full Disk Access**, and relaunch the app. This permission is needed when `yt-dlp` or `gallery-dl` reads cookies from a browser profile. The same setup screen is available at **X Downloader → Permissions Setup…**.
+The setup screen opens **System Settings → Privacy & Security → Full Disk Access**.
+Add X Downloader there, then relaunch it. The screen is also available from the app menu.
+Supported browsers include Safari, Chrome, Firefox, Edge, Brave, Chromium, Opera, and Vivaldi.
 
-The downloadable release is ad-hoc signed rather than notarized. On first launch, macOS may require you to right-click the app and choose **Open**.
+The release is ad hoc signed and not notarized. macOS can block a downloaded copy.
+You can build from source instead.
+
+## Files and size limits
+
+- Images become JPEG. The app reduces quality first, then dimensions if needed.
+  Transparency is flattened onto white.
+- Videos become H.264/AAC MP4. The app plans the bitrate and adjusts dimensions or frame rate
+  when needed. Compressed videos have no media metadata or chapters.
+- Size limits use decimal units: `20 MB` means `20,000,000 bytes`.
+- An empty limit keeps the downloaded or selected file without compression.
+
+<details>
+<summary>How downloads and browser cookies work</summary>
+
+`gallery-dl` downloads image attachments. `yt-dlp` downloads video attachments.
+Both use `--cookies-from-browser` with the browser you selected.
+FFmpeg merges separate video and audio streams when needed and handles local compression.
+
+The app does not store your credentials or cookies. The tools read the local browser cookie
+store when a download starts. Your account must already have access to the media.
+Deleted, protected, age-restricted, region-restricted, and login-only posts can still fail.
+Processing runs on your Mac. No API key or paid service is required.
+
+</details>
 
 ## Build from source
 
-Requires macOS 13 or newer and Xcode Command Line Tools.
+Install Xcode Command Line Tools on macOS 13 or later.
 
-```bash
+```sh
 git clone https://github.com/nickdrezza/x-video-downloader.git
 cd x-video-downloader
 ./scripts/build.sh
 open ".build/X Downloader.app"
 ```
 
-The build script compiles for the current Mac architecture, generates the `.icns` file, assembles the app bundle, and ad-hoc signs it. To create distributable ZIP and DMG installers:
+The script builds for the current Mac architecture, creates the icon and bundle, and signs it
+locally. To create ZIP and DMG installers:
 
-```bash
+```sh
 ./scripts/package.sh
 ```
 
-The DMG contains an **Applications** shortcut for the normal drag-to-install workflow.
-
-## How it works
-
-The UI is a small AppKit application written in Swift. Download mode runs `gallery-dl` for image attachments and `yt-dlp` for video attachments, both with `--cookies-from-browser` for the selected browser. FFmpeg merges separate video and audio streams when the source requires it, then applies the local compression layer when a max size is set.
-
-Compress-only mode uses the installed FFmpeg executable and follows the same target-size behavior as the companion Open Media Compressor: quality search first, then dimension reduction when quality alone cannot meet the target. The app does not store credentials or cookies; the download tools read the selected browser's local cookie store when a download starts. The account must already be allowed to view the media. Deleted, protected, age-restricted, region-restricted, or login-only posts may still fail.
+The DMG includes an Applications shortcut.
 
 ## Responsible use
 
-Only download videos you have permission to save. You are responsible for complying with copyright law, the source platform's terms, and any applicable local rules.
+Only download media you have permission to save. You are responsible for complying with
+copyright law, the source platform's terms, and applicable local rules.
 
 ## License
 
